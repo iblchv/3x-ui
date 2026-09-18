@@ -1,0 +1,57 @@
+# Fork-only image build. Upstream workflows are removed on release/* branches:
+# they push to upstream's Docker Hub/GHCR names and would fail or misfire here.
+name: Build patched 3x-ui image
+
+permissions:
+  contents: read
+  packages: write
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*-hy*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - name: Unit tests for the patched package
+        run: |
+          docker run --rm -v "$PWD":/app -w /app golang:1.26-alpine \
+            sh -c 'apk add --no-cache build-base >/dev/null && mkdir -p internal/web/dist && go test ./internal/xray/'
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/3x-ui
+          tags: |
+            type=ref,event=tag
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Fleet nodes are linux/amd64 only; add platforms here if that changes.
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Image digest
+        run: echo "### \`${{ steps.meta.outputs.tags }}@${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
